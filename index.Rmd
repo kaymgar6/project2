@@ -1,0 +1,217 @@
+---
+title: 'Project 2: Data Mining, Classification, Prediction'
+author: "SDS322E"
+date: ''
+output:
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+  pdf_document:
+    toc: no
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE, fig.align = "center", warning = F, message = F,
+tidy=TRUE, tidy.opts=list(width.cutoff=60), R.options=list(max.print=100))
+
+class_diag <- function(score, truth, positive, cutoff=.5){
+
+  pred <- factor(score>cutoff,levels=c("TRUE","FALSE"))
+  truth <- factor(truth==positive, levels=c("TRUE","FALSE"))
+
+  tab<-table(truth, pred)
+  acc=sum(diag(tab))/sum(tab)
+  sens=tab[1,1]/rowSums(tab)[1]
+  spec=tab[2,2]/rowSums(tab)[2]
+  ppv=tab[1,1]/colSums(tab)[1]
+
+#CALCULATE F1
+  f1=2*(sens*ppv)/(sens+ppv)
+  
+#CALCULATE EXACT AUC
+  truth<-as.numeric(truth=="TRUE")
+  ord<-order(score, decreasing=TRUE)
+  score <- score[ord]; truth <- truth[ord]
+  TPR=cumsum(truth)/max(1,sum(truth))
+  FPR=cumsum(!truth)/max(1,sum(!truth))
+  dup<-c(score[-1]>=score[-length(score)], FALSE)
+  TPR<-c(0,TPR[!dup],1); FPR<-c(0,FPR[!dup],1)
+  n <- length(TPR)
+  auc<- sum( ((TPR[-1]+TPR[-n])/2) * (FPR[-1]-FPR[-n]) )
+  round(data.frame(acc,sens,spec,ppv,f1,ba=(sens+spec)/2,auc, row.names = "Metrics"),4)
+}
+```
+
+# Mining, Classification, Prediction
+
+## Kayla Garza, kmg4327
+
+### Introduction 
+
+Introduce your dataset and each of your variables (or just your main variables if you have lots) in a paragraph. Where did you find the data? What are each of the variables measuring? How many observations are there? How many of observations are there per group for your categorical/binary variable(s)?
+
+My dataset is `satgpa` and it has 100 observations, and 6 variables. The first is binary which is the sex of the individual, male or female (with female=1 and male=2); the second and third variables are the numerical scores for the verbal and mathematical part of the SAT exam respectively, and the fouth variable `sat_sum` is the sum of these two scores. The next and final two variables correspond to the individuals overall performance in high school and in college represented by their GPAs. I found this dataset through R I believe/ the link provided but I tidied it to minimize the number of observations. I picked this data set because I wanted to see if there was a trend from students who perform well in high school but when they hit college realize its a different ball game and dont do as well like I did.
+
+```{R}
+library(tidyverse)
+# read your datasets in here, e.g., with read_csv()
+satgpa <- read_csv("satgpa.csv")
+# if your dataset needs tidying, do so here
+satgpa <- satgpa[1:100,-1]
+# any other code here
+view(satgpa)
+```
+
+### Cluster Analysis
+
+```{R}
+library(cluster)
+# clustering code here
+sil_width <- vector()
+for(i in 2:10){
+  kms <- kmeans(satgpa, centers=i)
+  sil <- silhouette(kms$cluster, dist(satgpa))
+  sil_width[i] <- mean(sil[,3])
+}
+
+ggplot() + geom_line(aes(x=1:10, y=sil_width)) + scale_x_continuous(name = "k", breaks = 1:10)
+
+satgpa_pam <- satgpa %>% pam(k=2)
+satgpa_pam$silinfo$avg.width
+satgpa_pam
+
+kms <- satgpa %>% kmeans(2) 
+#satgpa %>% mutate(cluster= as.factor(kms$cluster)) %>% ggpairs(.,cols=1:6, aes(color = cluster))
+
+pamclust<-satgpa %>% mutate(cluster=as.factor(satgpa_pam$clustering)) 
+clust1 <- pamclust %>% ggplot(aes(sat_v,sat_m,color=cluster)) + geom_point()
+clust2 <- pamclust %>% ggplot(aes(hs_gpa,fy_gpa,color=cluster)) + geom_point()
+clust3 <- pamclust %>% ggplot(aes(sat_sum, hs_gpa, color=cluster)) + geom_point()
+
+clust1
+clust2
+clust3
+```
+
+Based on all the previous clustering I am able to see that in `clust2` in which my variables were seeing hs_gpa vs fy_gpa, there was only one student in my dataset who received a 4.0 in HS and kept it their freshman year of college, not all those who stayed above 2.0 in high school stayed above 2.0 in college. From the other clusters I performed I see that students who typically did well on one part of the SAT did the same on the other as from `clust1`. I also see that in `clust3` that just because a student has a strong overall GPA (3.0 or higher) that it doesn't guarantee they ace the SAT; from the graph we see many students who got 110 or lower on the SAT who also had a GPA >=3.0 in cluster 1. From performing `ggpairs` on the data I see that there is a lot of overlap between the two clusters, especially with `sex` and `fy_gpa`.
+    
+    
+### Dimensionality Reduction with PCA
+
+```{R}
+# PCA code here
+princomp(satgpa, cor=T) -> pca1
+summary(pca1, loadings = T)
+
+pca1df <- data.frame(PC1=pca1$scores[,1], PC2=pca1$scores[,2])
+pca1df %>% mutate(sex = satgpa$sex) -> pca1df
+ggplot(pca1df, aes(PC1, PC2)) + geom_point(aes(color = sex))
+
+pca1df %>% mutate(hs_gpa = satgpa$hs_gpa) -> pca1df
+ggplot(pca1df, aes(PC1, PC2)) + geom_point(aes(color = hs_gpa))
+
+pca1df %>% mutate(fy_gpa = satgpa$fy_gpa) -> pca1df
+ggplot(pca1df, aes(PC1, PC2)) + geom_point(aes(color = fy_gpa))
+```
+
+If I keeping PCs greater than 100% total variation (PC1 and PC2), looking at the loadings for the first three PCs, we have PC1 with all of the loadings besides sex being negative and thus the same sign with similar magnitudes ranging only from about -0.36 to -0.52; For PC2 we a postive loadings for sex, hs_gpa, and fy_gpa and a negative loadings for sat_v, sat_m, and sat_sum in which those thtat have negative loadings have similar absoulte magnitudes and those with postive loadings ranging in magnitude from 0.38 to 0.73. This means that PC1 represents the general strength axis since all loadings have similar signs and magnitudes; PC2 represents a sex/hs_gpa/fy_gpa vs sat_v/sat_m/sat_sum axis which means that higher scores means high sex/hs_gpa/fy_gpa means scores and low sat_v/sat_m/sat_sum scores while lower scores means the opposite with low sex/hs_gpa/fy_gpa scores and high sat_v/sat_m/sat_sum scores.
+
+###  Linear Classifier
+
+```{R}
+# linear classifier code here
+library(caret)
+knn_fit <- knn3(sex=="1" ~ sat_m + sat_v, data=satgpa)
+
+#your code here
+prob_knn <- predict(knn_fit, newdata=satgpa)[,2]
+class_diag(prob_knn, satgpa$sex, positive = "True")
+
+
+```
+
+```{R}
+# cross-validation of linear classifier here
+cv <- trainControl(method="cv", number = 5, classProbs = T, savePredictions = T)
+fit <- train(am ~ wt+cyl+disp, data=mtcars, trControl=cv, method="glm")
+class_diag(fit$pred$pred, fit$pred$obs, positive=1)
+```
+
+This model is not the best but pretty well at predicting new observations per CV AUC with an AUC value of 0.83. No I don't see signs of overfitting.
+
+### Non-Parametric Classifier
+
+```{R}
+library(caret)
+# non-parametric classifier code here
+library(caret)
+knn_fit <- knn3(sex=="1" ~., data=satgpa)
+
+#your code here
+prob_knn <- predict(knn_fit, newdata=satgpa)[,2]
+class_diag(prob_knn, satgpa$sex, positive = "True")
+
+```
+
+```{R}
+# cross-validation of np classifier here
+cv <- trainControl(method="cv", number = 5, classProbs = T, savePredictions = T)
+fit <- train(am ~ wt+cyl+disp, data=mtcars, trControl=cv, method="glm")
+class_diag(fit$pred$pred, fit$pred$obs, positive=1)
+```
+
+My model is a little worse at predicting new observations per CV AUC than the one before. No I dont see signs of overfitting since AUC didnt lower. My nonparametric model compared with the linear model in its cross-validation performance had similar values for all the variables.
+
+
+### Regression/Numeric Prediction
+
+```{R}
+# regression model code here
+fit <- train(sat_sum ~ . , data=satgpa, method="rpart")
+library(rpart.plot)
+rpart.plot(fit$finalModel,digits=4)
+
+fit<-lm(sat_sum~.,data=satgpa) #predict mpg from all other variables
+yhat<-predict(fit)
+mean((satgpa$sat_sum-yhat)^2)
+
+satgpa %>% ggplot(aes(hs_gpa,fy_gpa))+geom_jitter(aes(color=sat_sum))
+```
+
+```{R}
+# cross-validation of regression model here
+library(caret)
+cv <- trainControl(method="cv", number = 5, classProbs = T, savePredictions = T)
+fit <- train(am ~ wt+cyl+disp, data=mtcars, trControl=cv, method="glm")
+class_diag(fit$pred$pred, fit$pred$obs, positive=1)
+```
+
+I don't believe this model is overfitting because the AUC is similar/comparable to that from the previous step.
+
+### Python 
+
+```{R}
+library(reticulate)
+use_python("/usr/bin/python3", required = F)
+max_sat_sum <- max(satgpa$sat_sum)
+
+```
+
+```{python}
+# python code here
+#max_sum
+#print(r.max, max)
+#cat(c("The max is ",py$max_sum))
+```
+
+I attempted to do this part to find the max of sat_sum but errors happened and i couldnt figure it out.
+
+### Concluding Remarks
+
+I loved being able to see the correlation between standardized test like the SAT and GPAs. and I found it interesting seeing the correlation between hs gpa and freshman year gpa.
+
+
+
+
